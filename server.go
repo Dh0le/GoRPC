@@ -3,6 +3,7 @@ package gorpc
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"gorpc/codec"
 	"io"
 	"log"
@@ -10,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 const MagicNumber = 0x3bef5c
@@ -18,12 +20,16 @@ const MagicNumber = 0x3bef5c
 type Option struct{
 	MagicNumber int // we use this magic number to mark a go rpc request
 	CodecType codec.Type // client may use different type of encoding
+	ConnectTimeout time.Duration
+	HandleTimeout time.Duration
 }
 
 
 var DefaultOption = &Option{
 	MagicNumber: MagicNumber,
 	CodecType: codec.GobType,
+	ConnectTimeout: time.Second*10,// default 10s to connect
+	// not hanle time out
 }
 
 // RPC server
@@ -174,15 +180,39 @@ func(server *Server)sendResponse(cc codec.Codec,h *codec.Header, body interface{
 }
 
 
-func(server *Server)handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup){
+func(server *Server)handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup,timeout time.Duration){
 	defer wg.Done()
-	err := req.svc.call(req.mtype,req.argv,req.replyv)
-	if err != nil{
-		req.h.Error = err.Error()
-		server.sendResponse(cc,req.h,invalidRequest,sending)
+	called := make(chan struct{})
+	sent := make(chan struct{})
+	// use a goroutine to run call
+	go func(){
+		err :=  req.svc.call(req.mtype,req.argv,req.replyv)
+		// place a holder into channel indicate call is completed
+		called <- struct{}{}
+		if err != nil{
+			req.h.Error = err.Error()
+			server.sendResponse(cc,req.h,invalidRequest,sending)
+			// place a holder into cahnnel indicate sent is completed
+			sent <- struct{}{}
+			return
+		}
+	}()
+
+	// if not timeout
+	if timeout == 0{
+		<-called
+		<-sent
 		return
 	}
-	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
+	// check if timeout reach frist or called completed first
+	select{
+	case <-time.After(timeout):
+		req.h.Error = fmt.Sprintf("rpc server: request handle time out:expect within %s",timeout)
+		server.sendResponse(cc,req.h,invalidRequest,sending)
+	case <-called:
+		<-sent
+	}
+	
 }
 
 
@@ -194,6 +224,8 @@ func(server *Server)Register(rcvr interface{})error{
 	}
 	return nil
 }
+
+func Register(rcvr interface{})error{return DefaultServer.Register(rcvr)}
 
 // given a service method string find serice and method
 func(server *Server)findService(serviceMethod string)(svc *service,mType *methodType,err error){
