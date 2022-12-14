@@ -2,12 +2,13 @@ package gorpc
 
 import (
 	"encoding/json"
-	"fmt"
+	"errors"
 	"gorpc/codec"
 	"io"
 	"log"
 	"net"
 	"reflect"
+	"strings"
 	"sync"
 )
 
@@ -26,7 +27,9 @@ var DefaultOption = &Option{
 }
 
 // RPC server
-type Server struct{}
+type Server struct{
+	serviceMap sync.Map
+}
 
 // Constructor
 func NewServer() *Server{
@@ -113,6 +116,8 @@ func(server *Server)serveCodec(cc codec.Codec){
 type request struct{
 	h *codec.Header
 	argv, replyv reflect.Value
+	mtype *methodType
+	svc *service
 }
 
 
@@ -137,15 +142,26 @@ func(server *Server)readRequest(cc codec.Codec)(*request,error){
 	}
 	// create request
 	req := &request{h:h}
-	// TODO: we will handle type of argument later
-	// read argv
-	req.argv = reflect.New(reflect.TypeOf(""))
+	// according to request method string
+	// find service and method
+	req.svc,req.mtype,err = server.findService(h.ServiceMethod)
+	if err != nil{
+		return req,err
+	}
+	// get argument
+	req.argv = req.mtype.newArgv()
+	// get return
+	req.replyv = req.mtype.newReplyv()
+	argvi := req.argv.Interface()
+	// if arguement is not a pointer
+	if req.argv.Type().Kind() != reflect.Ptr{
+		argvi = req.argv.Addr().Interface()
+	}
 	// read request
-	if err = cc.ReadBody(req.argv.Interface());err != nil{
+	if err = cc.ReadBody(argvi);err != nil{
 		log.Println("rpc server:read argv err:",err)
 	}
 	return req,nil
-	
 }
 
 // sending response is a sequential process
@@ -159,11 +175,54 @@ func(server *Server)sendResponse(cc codec.Codec,h *codec.Header, body interface{
 
 
 func(server *Server)handleRequest(cc codec.Codec, req *request, sending *sync.Mutex, wg *sync.WaitGroup){
-	// TODO, should call registered rpc methods to get the right replyv
-	// just print argv and send a hello message
 	defer wg.Done()
-	log.Println(req.h, req.argv.Elem())
-	req.replyv = reflect.ValueOf(fmt.Sprintf("geerpc resp %d", req.h.Seq))
+	err := req.svc.call(req.mtype,req.argv,req.replyv)
+	if err != nil{
+		req.h.Error = err.Error()
+		server.sendResponse(cc,req.h,invalidRequest,sending)
+		return
+	}
 	server.sendResponse(cc, req.h, req.replyv.Interface(), sending)
 }
+
+
+func(server *Server)Register(rcvr interface{})error{
+	s := newService(rcvr)
+
+	if _, dup := server.serviceMap.LoadOrStore(s.name,s);dup{
+		return errors.New("rpc server: service already registered")
+	}
+	return nil
+}
+
+// given a service method string find serice and method
+func(server *Server)findService(serviceMethod string)(svc *service,mType *methodType,err error){
+	// split string
+	dot := strings.LastIndex(serviceMethod,".")
+	if dot < 0{
+		err= errors.New("rpc server: service/method request is wrong formed")
+		return
+	}
+	// get name
+	serviceName,methodName := serviceMethod[:dot],serviceMethod[dot+1:]
+	//load service
+	svic,ok := server.serviceMap.Load(serviceName)
+	if !ok{
+		err = errors.New("rpc server: cannot find service")
+		return
+	}
+	// parse service
+	svc = svic.(*service)
+	// get method
+	mType = svc.method[methodName]
+
+	if mType == nil{
+		err = errors.New("rpc server:cannot find method")
+	}
+	return 
+}
+
+
+
+
 
