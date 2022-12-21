@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync"
@@ -29,10 +30,6 @@ const (
 	defaultRPCPath = "/_gorpc_"
 	defaultDebugPath = "/debug/gorpc"
 )
-
-
-	
-
 
 
 var DefaultOption = &Option{
@@ -68,6 +65,24 @@ func (server *Server)Accept(lis net.Listener){
 
 // default accept
 func Accept(lis net.Listener){DefaultServer.Accept(lis)}
+
+// serve HTTP(this only allows CONNECT method)
+func (server *Server)ServeHTTP(w http.ResponseWriter, req *http.Request){
+	if req.Method != "CONNECT"{
+		w.Header().Set("Content-Type","text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_,_ = io.WriteString(w,"405 must CONNECT\n")
+		return
+	}
+
+	conn, _,err := w.(http.Hijacker).Hijack()
+	if err != nil{
+		log.Print("rpc hijacking",req.RemoteAddr,":",err.Error())
+		return
+	}
+	_,_  = io.WriteString(conn,"HTTP/1.0"+connected+"\n\n")
+	server.ServeConn(conn)
+}
 
 // serve implementation
 func(server *Server)ServeConn(conn io.ReadWriteCloser){
