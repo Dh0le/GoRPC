@@ -24,6 +24,16 @@ type Option struct{
 	HandleTimeout time.Duration
 }
 
+const (
+	connected = "200 Connected to Go RPC"
+	defaultRPCPath = "/_gorpc_"
+	defaultDebugPath = "/debug/gorpc"
+)
+
+
+	
+
+
 
 var DefaultOption = &Option{
 	MagicNumber: MagicNumber,
@@ -82,7 +92,7 @@ func(server *Server)ServeConn(conn io.ReadWriteCloser){
 		return 
 	}
 	// let codec handle rest of the connection, the connection will be passed into codec in constructor
-	server.serveCodec(f(conn))
+	server.serveCodec(f(conn),&opt)
 
 }
 
@@ -91,7 +101,7 @@ var invalidRequest = struct{}{}
 // 1. reanding request
 // 2. handle request
 // 3. send response
-func(server *Server)serveCodec(cc codec.Codec){
+func(server *Server)serveCodec(cc codec.Codec,opt *Option){
 	sending := new(sync.Mutex) // we want to send complete response
 	wg := new(sync.WaitGroup) // wait until all requests are handled
 	// start to serve request
@@ -109,7 +119,7 @@ func(server *Server)serveCodec(cc codec.Codec){
 		}
 		// handle request can be concurrent
 		wg.Add(1)
-		go server.handleRequest(cc,req,sending,wg)
+		go server.handleRequest(cc,req,sending,wg,opt.HandleTimeout)
 	}
 	// wailt until all request has been handle
 	wg.Wait()
