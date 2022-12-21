@@ -279,6 +279,16 @@ func(server *Server)findService(serviceMethod string)(svc *service,mType *method
 	return 
 }
 
+func (server *Server)HandleHTTP(){
+	http.Handle(defaultRPCPath,server)
+	http.Handle(defaultDebugPath,debugHTTP{Server: server})
+	log.Println("rpc server debug path",defaultDebugPath)
+}
+
+func HandleHTTP() {
+	DefaultServer.HandleHTTP()
+}
+
 
 
 
