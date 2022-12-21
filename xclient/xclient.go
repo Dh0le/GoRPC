@@ -7,8 +7,6 @@ import (
 	"io"
 	"reflect"
 	"sync"
-
-	"golang.org/x/net/context"
 )
 
 type XClient struct{
