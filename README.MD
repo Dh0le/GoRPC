@@ -6,4 +6,4 @@
 
 ## Usage
 
-For detail usage [click here](https://github.com/Dh0le/GoRPC/blob/main/main.go)
+For detail usage [click here](https://github.com/Dh0le/GoRPC/blob/main/main/main.go)
