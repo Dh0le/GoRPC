@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"gorpc"
+	"gorpc/registry"
+	"gorpc/xclient"
 	"log"
 	"net"
 	"net/http"
@@ -13,48 +15,108 @@ import (
 type Foo int
 
 type Args struct{ Num1, Num2 int }
-
+// a test function
 func (f Foo) Sum(args Args, reply *int) error {
 	*reply = args.Num1 + args.Num2
 	return nil
 }
 
+// sleep function to test timeout
+func (f Foo) Sleep(args Args, reply *int) error {
+	time.Sleep(time.Second * time.Duration(args.Num1))
+	*reply = args.Num1 + args.Num2
+	return nil
+}
 
-func startServer(addrCh chan string){
-	var foo Foo
+// start the registry server
+func startRegistry(wg *sync.WaitGroup) {
 	l, _ := net.Listen("tcp", ":9999")
-	_ = gorpc.Register(&foo)
-	gorpc.HandleHTTP()
-	addrCh <- l.Addr().String()
+	registry.HandleHTTP()
+	wg.Done()
 	_ = http.Serve(l, nil)
 }
 
-func call(addrCh chan string) {
-	client, _ := gorpc.DialHTTP("tcp", <-addrCh)
-	defer func() { _ = client.Close() }()
+// start a normal server and register it to the registry
+func startServer(registryAddr string, wg *sync.WaitGroup) {
+	var foo Foo
+	l, _ := net.Listen("tcp", ":0")
+	server := gorpc.NewServer()
+	_ = server.Register(&foo)
+	registry.Heartbeat(registryAddr, "tcp@"+l.Addr().String(), 0)
+	wg.Done()
+	server.Accept(l)
+}
 
-	time.Sleep(time.Second)
+// dummy call function
+func foo(xc *xclient.XClient, ctx context.Context, typ, serviceMethod string, args *Args) {
+	var reply int
+	var err error
+	switch typ {
+	case "call":
+		err = xc.Call(ctx, serviceMethod, args, &reply)
+	case "broadcast":
+		err = xc.Broadcast(ctx, serviceMethod, args, &reply)
+	}
+	if err != nil {
+		log.Printf("%s %s error: %v", typ, serviceMethod, err)
+	} else {
+		log.Printf("%s %s success: %d + %d = %d", typ, serviceMethod, args.Num1, args.Num2, reply)
+	}
+}
+
+// generate a local call
+func call(registry string) {
+	// create discovery and client
+	d := xclient.NewGoRegistryDiscovery(registry, 0)
+	xc := xclient.NewXClient(d, xclient.RandomSelect, nil)
+	defer func() { _ = xc.Close() }()
 	// send request & receive response
 	var wg sync.WaitGroup
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			args := &Args{Num1: i, Num2: i * i}
-			var reply int
-			if err := client.Call(context.Background(), "Foo.Sum", args, &reply); err != nil {
-				log.Fatal("call Foo.Sum error:", err)
-			}
-			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
+			foo(xc, context.Background(), "call", "Foo.Sum", &Args{Num1: i, Num2: i * i})
 		}(i)
 	}
 	wg.Wait()
 }
 
-func main(){
-	log.SetFlags(0)
-	ch := make(chan string)
-	go call(ch)
-	startServer(ch)
+// how to boardcast the task to all available server
+func broadcast(registry string) {
+	d := xclient.NewGoRegistryDiscovery(registry, 0)
+	xc := xclient.NewXClient(d, xclient.RandomSelect, nil)
+	defer func() { _ = xc.Close() }()
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			foo(xc, context.Background(), "broadcast", "Foo.Sum", &Args{Num1: i, Num2: i * i})
+			// expect 2 - 5 timeout
+			ctx, _ := context.WithTimeout(context.Background(), time.Second*2)
+			foo(xc, ctx, "broadcast", "Foo.Sleep", &Args{Num1: i, Num2: i * i})
+		}(i)
+	}
+	wg.Wait()
 }
 
+// demo entry
+func main() {
+	log.SetFlags(0)
+	registryAddr := "http://localhost:9999/_geerpc_/registry"
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go startRegistry(&wg)
+	wg.Wait()
+
+	time.Sleep(time.Second)
+	wg.Add(2)
+	go startServer(registryAddr, &wg)
+	go startServer(registryAddr, &wg)
+	wg.Wait()
+
+	time.Sleep(time.Second)
+	call(registryAddr)
+	broadcast(registryAddr)
+}
