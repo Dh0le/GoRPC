@@ -2,8 +2,8 @@
 
 ## Overall Structure
 
-![avatar](/GoRPC/GoRPCFramework.jpg)
+![avatar](../GoRPC/GoRPCFramework.jpg)
 
 ## Usage
 
-For detail usage [click here](/GoRPC/main/main.go)
+For detail usage [click here](../GoRPC/main/main.go)
