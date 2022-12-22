@@ -17,7 +17,7 @@ const(
 
 type Discovery interface{
 	Refresh() error
-	Update(servers []string)
+	Update(servers []string)error
 	Get(mode SelectMode)(string,error)
 	GetAll()([]string,error)
 }
